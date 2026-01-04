@@ -12,26 +12,100 @@ CLASS_NAMES = [
     "BandMarching", "BaseballPitch", "Basketball", "BasketballDunk", "BenchPress",
     "Biking", "Billiards", "BlowDryHair", "BlowingCandles", "BodyWeightSquats",
     "Bowling", "BoxingPunchingBag", "BoxingSpeedBag", "BreastStroke", "BrushingTeeth",
-    # ... Add more as needed. For the demo, if prediction index > len, return "Unknown"
+    "CleanAndJerk", "CliffDiving", "CricketBowling", "CricketShot", "CuttingInKitchen",
+    "Diving", "Drumming", "Fencing", "FieldHockeyPenalty", "FloorGymnastics",
+    "FrisbeeCatch", "FrontCrawl", "GolfSwing", "Haircut", "Hammering",
+    "HammerThrow", "HandstandPushups", "HandstandWalking", "HeadMassage", "HighJump",
+    "HorseRiding", "HorseRace", "IceDancing", "JavelinThrow", "JugglingBalls",
+    "JumpRope", "JumpingJack", "Kayaking", "Knitting", "LongJump",
+    "Lunges", "MilitaryParade", "Mixing", "MoppingFloor", "Nunchucks",
+    "ParallelBars", "PizzaTossing", "PlayingCello", "PlayingDaf", "PlayingDhol",
+    "PlayingFlute", "PlayingGuitar", "PlayingPiano", "PlayingSitar", "PlayingTabla",
+    "PlayingViolin", "PoleVault", "PommelHorse", "PullUps", "Punch",
+    "PushUps", "Rafting", "RockClimbingIndoor", "RopeClimbing", "Rowing",
+    "SalsaSpin", "ShavingBeard", "Shotput", "SkateBoarding", "Skiing",
+    "Skijumping", "SkyDiving", "SoccerJuggling", "SoccerPenalty", "StillRings",
+    "SumoWrestling", "Surfing", "Swing", "TableTennisShot", "TaiChi",
+    "TennisSwing", "ThrowDiscus", "TrampolineJumping", "Typing", "UnevenBars",
+    "WalkingWithDog", "WallPushups", "WritingOnBoard", "YoYo"
 ]
 
 class ActionModel:
-    def __init__(self, model_path="ucf101_cnn_lstm_subset_model.h5"):
+    def __init__(self, model_path="ucf101_cnn_lstm_final_model.h5"):
         self.model_path = model_path
         self.model = None
         self.load_model()
 
     def load_model(self):
+        # Debug: Print current working directory and files
+        current_dir = os.getcwd()
+        print(f"Current working directory: {current_dir}")
+        print(f"Looking for model at: {os.path.abspath(self.model_path)}")
+        print(f"Files in current directory: {os.listdir(current_dir)}")
+        
         if os.path.exists(self.model_path):
-            print(f"Loading model from {self.model_path}...")
+            print(f"✓ Model file found: {self.model_path}")
+            
+            # Strategy 1: Attempt direct load with custom_objects to fix DTypePolicy
+            print("Attempting to load model using custom_object_scope...")
             try:
-                self.model = tf.keras.models.load_model(self.model_path)
-                print("Model loaded successfully.")
+                # Keras 3 uses DTypePolicy; if loading on a system where it's missing or different,
+                # we map it to float32.
+                def fake_dtype_policy(*args, **kwargs):
+                    return tf.keras.mixed_precision.Policy("float32")
+
+                custom_objects = {
+                    "DTypePolicy": fake_dtype_policy,
+                    "PatchedInputLayer": tf.keras.layers.InputLayer # handle my previous patch if still in file
+                }
+
+                with tf.keras.utils.custom_object_scope(custom_objects):
+                    self.model = tf.keras.models.load_model(
+                        self.model_path, 
+                        compile=False,
+                        safe_mode=False
+                    )
+                print("✓ Model loaded successfully using direct load!")
+                return
             except Exception as e:
-                print(f"Error loading model: {e}")
+                print(f"⚠ Direct load failed: {e}")
+
+            # Strategy 2: Functional reconstruction with specific MobileNetV2 settings
+            print("Attempting to reconstruct model using Functional API...")
+            try:
+                from tensorflow.keras.applications import MobileNetV2
+                from tensorflow.keras.layers import TimeDistributed, LSTM, Dense, GlobalAveragePooling2D, Input
+                from tensorflow.keras.models import Model
+
+                # Create the architecture
+                inputs = Input(shape=(16, 224, 224, 3))
+                # Note: include_top=False is critical
+                base = MobileNetV2(weights=None, include_top=False, input_shape=(224, 224, 3))
+                
+                x = TimeDistributed(base)(inputs)
+                x = TimeDistributed(GlobalAveragePooling2D())(x)
+                x = LSTM(128)(x)
+                x = Dense(128, activation="relu")(x)
+                outputs = Dense(101, activation="softmax")(x)
+                
+                self.model = Model(inputs, outputs)
+                
+                # Load weights. If it failed before, try with by_name=True or False
+                try:
+                    self.model.load_weights(self.model_path, by_name=True)
+                    print("✓ Model weights loaded using by_name=True!")
+                except Exception:
+                    self.model.load_weights(self.model_path, by_name=False)
+                    print("✓ Model weights loaded using by_name=False!")
+                
+                print("✓ Model reconstructed and weights loaded successfully!")
+            except Exception as e:
+                print(f"✗ Reconstruct/Load weights failed: {e}")
+                import traceback
+                traceback.print_exc()
                 self.model = None
         else:
-            print(f"Model file {self.model_path} not found. Using MockModel.")
+            print(f"✗ Model file {self.model_path} not found. Using MockModel.")
             self.model = None
 
     def predict(self, input_data):
